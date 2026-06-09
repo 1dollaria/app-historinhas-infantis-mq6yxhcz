@@ -1,0 +1,90 @@
+name: build-android
+
+# Disparado pelo backend do 1dollar via API (workflow_dispatch).
+# Compila o app Expo, assina com o keystore do app (injetado como secret)
+# e publica APK + AAB + SHA como artifact.
+on:
+  workflow_dispatch:
+    inputs:
+      build_type:
+        description: "O que gerar"
+        type: choice
+        options: [both, aab, apk]
+        default: both
+
+jobs:
+  android:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - name: Instala dependências
+        run: npm install
+
+      - name: Expo prebuild (gera a pasta android/)
+        run: npx expo prebuild --platform android --no-install
+
+      - name: Restaura o keystore do app
+        env:
+          ANDROID_KEYSTORE_B64: ${{ secrets.ANDROID_KEYSTORE_B64 }}
+        run: echo "$ANDROID_KEYSTORE_B64" | base64 -d > android/app/upload.keystore
+
+      - name: Configura assinatura de release
+        env:
+          KS_PASS: ${{ secrets.KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+          KEY_PASS: ${{ secrets.KEY_PASSWORD }}
+        run: |
+          # injeta um signingConfig "release" lendo das gradle.properties
+          perl -0777 -i -pe 's/signingConfigs \{/signingConfigs {\n        release {\n            storeFile file(MYAPP_UPLOAD_STORE_FILE)\n            storePassword MYAPP_UPLOAD_STORE_PASSWORD\n            keyAlias MYAPP_UPLOAD_KEY_ALIAS\n            keyPassword MYAPP_UPLOAD_KEY_PASSWORD\n        }/' android/app/build.gradle
+          # aponta os buildTypes para a chave de release (em vez do debug)
+          sed -i 's/signingConfig signingConfigs.debug/signingConfig signingConfigs.release/g' android/app/build.gradle
+          # valores das credenciais (linha em branco inicial: a gradle.properties
+          # do Expo não termina com newline, senão a 1ª prop cola na última linha)
+          {
+            echo ""
+            echo "MYAPP_UPLOAD_STORE_FILE=upload.keystore"
+            echo "MYAPP_UPLOAD_STORE_PASSWORD=$KS_PASS"
+            echo "MYAPP_UPLOAD_KEY_ALIAS=$KEY_ALIAS"
+            echo "MYAPP_UPLOAD_KEY_PASSWORD=$KEY_PASS"
+          } >> android/gradle.properties
+
+      - name: Compila (AAB e/ou APK)
+        working-directory: android
+        run: |
+          TASKS=""
+          case "${{ inputs.build_type }}" in
+            aab)  TASKS=":app:bundleRelease" ;;
+            apk)  TASKS=":app:assembleRelease" ;;
+            *)    TASKS=":app:bundleRelease :app:assembleRelease" ;;
+          esac
+          ./gradlew $TASKS --no-daemon
+
+      - name: Extrai SHA-1 / SHA-256
+        env:
+          KS_PASS: ${{ secrets.KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+        run: |
+          keytool -list -v -keystore android/app/upload.keystore \
+            -alias "$KEY_ALIAS" -storepass "$KS_PASS" \
+            | grep -E 'SHA1:|SHA256:|SHA-1:|SHA-256:' > sha.txt || true
+          echo "Fingerprints:" && cat sha.txt
+
+      - name: Publica artifact (APK + AAB + SHA)
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-output
+          if-no-files-found: warn
+          path: |
+            android/app/build/outputs/bundle/release/*.aab
+            android/app/build/outputs/apk/release/*.apk
+            sha.txt

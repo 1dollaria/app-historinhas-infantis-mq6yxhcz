@@ -1,0 +1,26 @@
+{
+  "expo": {
+    "name": "Historinhas Infantis",
+    "slug": "historinhas-infantis",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "userInterfaceStyle": "automatic",
+    "newArchEnabled": true,
+    "plugins": [
+      [
+        "expo-build-properties",
+        {
+          "android": {
+            "kotlinVersion": "1.9.25"
+          }
+        }
+      ]
+    ],
+    "android": {
+      "package": "com.umdollar.historinhasinfantis"
+    },
+    "ios": {
+      "bundleIdentifier": "com.umdollar.historinhasinfantis"
+    }
+  }
+}
